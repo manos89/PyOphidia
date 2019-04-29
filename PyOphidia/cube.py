@@ -101,7 +101,7 @@ class Cube():
         exportnc2(misc='no', output_path='default', output_name='default', cdd=None, force='no', export_metadata='yes', schedule=0, exec_mode='sync', ncores=1,
                   display=False)
           -> None : wrapper of the operator OPH_EXPORTNC2
-        export_array(show_id='no', show_time='no', subset_dims=None, subset_filter=None, time_filter='no')
+        export_array(show_id='no', show_time='no', subset_dims=None, subset_filter=None, time_filter='no', max_rows=None)
           -> dict or None : wrapper of the operator OPH_EXPLORECUBE
         info(display=True)
           -> None : call OPH_CUBESIZE and OPH_CUBESCHEMA to fill all Cube attributes
@@ -4715,8 +4715,8 @@ class Cube():
             print(get_linenumber(), "Something went wrong:", e)
             raise RuntimeError()
 
-    def export_array(self, show_id='no', show_time='no', subset_dims=None, subset_filter=None, time_filter='no'):
-        """export_array(show_id='no', show_time='no', subset_dims=None, subset_filter=None, time_filter='no') -> dict or None : wrapper of the operator OPH_EXPLORECUBE
+    def export_array(self, show_id='no', show_time='no', subset_dims=None, subset_filter=None, time_filter='no', max_rows=None):
+        """export_array(show_id='no', show_time='no', subset_dims=None, subset_filter=None, time_filter='no', max_rows=None) -> dict or None : wrapper of the operator OPH_EXPLORECUBE
 
         :param show_id: yes|no
         :type show_id: str
@@ -4728,6 +4728,8 @@ class Cube():
         :type subset_filter: str
         :param time_filter: yes|no
         :type time_filter: str
+        :param max_rows: Maximum number of rows to export from datacube
+        :type time_filter: int
         :returns: data_values or None
         :rtype: dict or None
         :raises: RuntimeError
@@ -4737,25 +4739,27 @@ class Cube():
             raise RuntimeError('Cube.client or pid is None')
         response = None
 
-        try:
-            self.info(display=False)
-        except Exception as e:
-            print(get_linenumber(), "Something went wrong in instantiating the cube", e)
-        finally:
-            pass
+        adimCube = False
+        if max_rows is None:
+            try:
+                self.info(display=False)
+            except Exception as e:
+                print(get_linenumber(), "Something went wrong in instantiating the cube", e)
+            finally:
+                pass
 
-        # Get number of max rows
-        maxRows = 1
-        adimCube = True
-        for d in self.dim_info:
-            # Check if at least one dimensions does not have size "ALL"
-            if d['size'].upper() != "ALL":
-                adimCube = False
-            if d['array'] == 'no':
+            # Get number of max rows
+            max_rows = 1
+            adimCube = True
+            for d in self.dim_info:
+                # Check if at least one dimensions does not have size "ALL"
                 if d['size'].upper() != "ALL":
-                    maxRows = maxRows * int(d['size'])
+                    adimCube = False
+                if d['array'] == 'no':
+                    if d['size'].upper() != "ALL":
+                        max_rows = max_rows * int(d['size'])
 
-        query = 'oph_explorecube ncore=1;base64=yes;level=2;show_index=yes;subset_type=coord;limit_filter=' + str(maxRows) + ';'
+        query = 'oph_explorecube ncore=1;base64=yes;level=2;show_index=yes;subset_type=coord;limit_filter=' + str(max_rows) + ';'
 
         if time_filter is not None:
             query += 'time_filter=' + str(time_filter) + ';'
