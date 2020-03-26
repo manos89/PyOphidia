@@ -97,21 +97,19 @@ def convert_to_dataframe(cube):
             raise RuntimeError('The value type is not valid')
         return num
 
-    def _add_coordinates(cube, df, response):
+    def _add_coordinates(cube, response):
         """
-        _add_coordinates(cube, dr, response) -> pandas.core.frame.DataFrame,int: a function that uses the response from
-            the oph_explorecube and adds coordinates to the DataFrame object
+        _add_coordinates(cube,response) -> pandas.core.indexes.multi.MultiIndex: a function that uses the response
+            from the oph_explorecube and converts dimensions to pandas multiIndex format
         :param cube: the cube object
         :type cube:  <class 'PyOphidia.cube.Cube'>
-        :param df: the pandas dataframe object
-        :type df:  <class 'pandas.core.frame.DataFrame'>
         :param response: response from pyophidia query
         :type response:  <class 'dict'>
-        :returns: pandas.core.frame.DataFrame,int|None
-        :rtype: <class 'pandas.core.frame.DataFrame'>,<class 'int'>|None
+        :returns: pandas.core.indexes.multi.MultiIndex|None
+        :rtype: <class 'pandas.core.indexes.multi.MultiIndex'>|None
         """
         max_size = max([int(dim["size"]) for dim in cube.dim_info])
-        lengths = []
+        indexes = {}
         try:
             for response_i in response['response']:
                 if response_i['objkey'] == 'explorecube_dimvalues':
@@ -123,9 +121,8 @@ def convert_to_dataframe(cube):
                                 for val in response_j['rowvalues']:
                                     dims = [s.strip() for s in val[1].split(',')]
                                     temp_array.append(dims[0])
-                                df[response_j['title']] = temp_array
+                                indexes[response_j['title']] = temp_array
                             else:
-                                lengths.append(len(response_j['rowvalues']))
                                 temp_array = []
                                 for val in response_j['rowvalues']:
                                     decoded_bin = base64.b64decode(val[1])
@@ -133,30 +130,25 @@ def convert_to_dataframe(cube):
                                     format = _get_unpack_format(length, response_j['rowfieldtypes'][1])
                                     dims = struct.unpack(format, decoded_bin)
                                     temp_array.append(dims[0])
-                                if max_size > len(list(temp_array)):
-                                    for i in range(0, max_size - len(list(temp_array))):
-                                        temp_array.append(None)
-                                df[response_j['title']] = list(temp_array)
+                                indexes[response_j['title']] = list(temp_array)
                         else:
                             raise RuntimeError("Unable to get dimension name or values in response")
                     break
         except Exception as e:
             print(get_linenumber(), "Unable to get dimensions from response:", e)
             return None
-        return df, lengths
+        return pd.MultiIndex.from_product(list(indexes.values()), names=list(indexes.keys()))
 
-    def _add_measure(cube, df, response, lengths):
+    def _add_measure(cube, indexes, response):
         """
-        _add_measure(cube, dr, response) -> pandas.core.frame.DataFrame: a function that uses the response from
-            the oph_explorecube and adds the measure to the dataframe object
+        _add_measure(cube, indexes, response) -> pandas.core.frame.DataFrame: a function that uses the response from
+            the oph_explorecube and creates the pandas.Dataframe
         :param cube: the cube object
         :type cube:  <class 'PyOphidia.cube.Cube'>
-        :param df: the pandas dataframe object
-        :type df:  <class 'pandas.core.frame.DataFrame'>
+        :param indexes: indexes in pandas multiindex format
+        :type indexes: <class 'pandas.core.indexes.multi.MultiIndex'>
         :param response: response from pyophidia query
         :type response:  <class 'dict'>
-        :param lengths: list of the coordinate lengths
-        :type lengths:  <class 'list'>
         :returns: pandas.core.frame.DataFrame|None
         :rtype: <class 'pandas.core.frame.DataFrame'>|None
         """
@@ -185,16 +177,6 @@ def convert_to_dataframe(cube):
                                 else:
                                     for v in measure:
                                         values.append(v)
-                            for i in range(len(lengths) - 1, -1, -1):
-                                current_array = []
-                                if i == len(lengths) - 1:
-                                    for j in range(0, len(values), lengths[i]):
-                                        current_array.append(values[j:j + lengths[i]])
-                                else:
-                                    for j in range(0, len(previous_array), lengths[i]):
-                                        current_array.append(previous_array[j:j + lengths[i]])
-                                previous_array = current_array
-                            measure = previous_array[0]
                         else:
                             raise RuntimeError("Unable to get measure values in response")
                         break
@@ -204,31 +186,24 @@ def convert_to_dataframe(cube):
         except Exception as e:
             print("Unable to get measure from response:", e)
             return None
-        sorted_coordinates = []
-        for l in lengths:
-            for c in cube.dim_info:
-                if l == int(c["size"]) and c["name"] not in sorted_coordinates:
-                    sorted_coordinates.append(c["name"])
-                    break
-        df[cube.measure] = measure
+        df = pd.DataFrame({cube.measure: values}, index=indexes)
         return df
 
     _dependency_check()
     import pandas as pd
     cube.info(display=False)
     pid = cube.pid
-    df = pd.DataFrame()
     query = 'oph_explorecube ncore=1;base64=yes;level=2;show_index=yes;subset_type=coord;limit_filter=0;cube={0};'. \
         format(pid)
     cube.client.submit(query, display=False)
     response = cube.client.deserialize_response()
     try:
-        df, lengths = _add_coordinates(cube, df, response)
+        indexes = _add_coordinates(cube, response)
     except Exception as e:
         print(get_linenumber(), "Something is wrong with the coordinates, error: ", e)
         return None
     try:
-        df = _add_measure(cube, df, response, lengths)
+        df = _add_measure(cube, indexes, response)
     except Exception as e:
         print(get_linenumber(), "Something is wrong with the measure, error: ", e)
         return None
