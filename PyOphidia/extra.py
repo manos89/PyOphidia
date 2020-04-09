@@ -25,6 +25,7 @@ import base64
 import struct
 import PyOphidia.cube as cube
 from inspect import currentframe
+
 sys.path.append(os.path.dirname(__file__))
 
 
@@ -33,152 +34,112 @@ def get_linenumber():
     return __file__, cf.f_back.f_lineno
 
 
-def where(cube=cube, expression="x", if_true=1, if_false=0, ncores=1, nthreads=1,
-          description='-', display=False):
-    """where(cube=cube, expression="x", if_true=1, if_false=0, ncores=1, nthreads=1,
-          description='-') -> Pyophidia.cube : Get a cube object after having run the predicate query
-    :param cube: the initial cube
-    :type cube: <class 'PyOphidia.cube.Cube'>
-    :param expression: a mathematical equation which represents a way to validate the results we want
-    :type expression: str
-    :param if_true: the  return value if the expression is true (default is 1)
-    :type if_true: str or int or bool
-    :param if_false: the  return value if the expression is false (default is 0)
-    :type if_false: str or int or bool
-    :param ncores: the number of cores that we should use to perform the operation (default is 1)
-    :type ncores: int
-    :param nthreads: the number of threads that we should use to perform the operation (default is 1)
-    :type nthreads: int
-    :param description: additional description to be associated with the output container
-    :type description: str
-    :param display: option for displaying the response in a "pretty way" using the pretty_print function (default is False)
-    :type display: bool
-    :returns: a 'PyOphidia.cube.Cube' object
-    :rtype: <class 'PyOphidia.cube.Cube'>
-    :raises: RuntimeError
-    """
+def reduction(cube, operation, dim, nthreads=1, ncores=1, description="-", **kwargs):
 
-    def _get_output_type(if_true, input_type):
-        """_get_output_type(if_true, input_type) -> str : Get the ophidia output type of the where function
-        :param if_true: the type of the positive result
-        :type if_true: int or str or bytes
-        :param input_type: the Pyophidia input type
-        :type input_type: str
-        :returns: a string that represents the Pyophidia type of the output variable
-        :rtype: str
-        :raises: RuntimeError
+    def _time_dimension_finder(cube):
         """
-        if isinstance(if_true, int):
-            if input_type == "oph_long":
-                return "oph_long"
-            return "oph_int"
-        elif isinstance(if_true, float):
-            if input_type == "oph_double":
-                return "oph_double"
-            return "oph_float"
-        elif isinstance(if_true, bytes):
-            return "oph_bytes"
+        _time_dimension_finder(cube) -> str: finds the time dimension, if any
+        :param cube: the cube object
+        :type cube:  <class 'PyOphidia.cube.Cube'>
+        :returns: str|None
+        :rtype: <class 'str'>
+        """
+        for c in cube.dim_info:
+            if c["hierarchy"].lower() == "oph_time":
+                return c["name"]
+        return None
+
+    def _args_validation(cube, operation, dim):
+        if not cube or not operation or not dim:
+            raise RuntimeError('You have to declare cube and operation and dim')
+
+    def _dim_validation(cube, dim):
+        all_dims = [d["name"] for d in cube.dim_info]
+        if dim not in (all_dims) and dim != "explicit" and dim != "implicit":
+            raise RuntimeError("dim doesn't have a valid value")
+
+    def _find_dim_type(cube, dim):
+        array_bool = [d["array"] for d in cube.dim_info if d["name"] == dim][0]
+        if array_bool == "no":
+            return "implicit"
         else:
-            raise RuntimeError('given if_true is wrong')
+            return "explicit"
 
-    def _get_input_type(input_type):
-        """_get_input_type(input_type) -> str : Get the ophidia input type of the where function
-        :param input_type: the Pyophidia input type
-        :type input_type: str
-        :returns: a string that represents the Pyophidia type of the input variable
-        :rtype: str
-        :raises: RuntimeError
-        """
-        if input_type == "float":
-            return "oph_float"
-        elif input_type == "int":
-            return "oph_int"
-        elif input_type == "bytes":
-            return "oph_bytes"
-        elif input_type == "double":
-            return "oph_double"
-        else:
-            raise RuntimeError('given input_type is wrong')
-
-    def _split_expression(expression):
-        """_split_expression(expression) -> str, str, str split the expression to 3 parts so it will be easier to use on
-        predicate
-        :param expression: a string that represents an equation that will be used for the predicate method
-        :type expression: str
-        :return: measure
-        :rtype: str
-        :return: measure
-        :rtype: str
-        :return: final_left_part
-        :rtype: str
-        :return: right_part
-        :rtype: str
-        :raises: RuntimeError
-        """
-        cube.info(display=False)
-        comparison_operators = ["=", ">", "!=", ">=", "<", "<="]
-        arithmetical_operators = ["+", "-", "/", "*", "**", "%", "//"]
-        for comparison_operator in comparison_operators:
-            if comparison_operator in expression:
-                current_comparison_operator = comparison_operator
-                left_part = expression.split(comparison_operator)[0]
-                right_part_number = expression.split(comparison_operator)[1]
-                break
-        try:
-            float_right_part_number = float(right_part_number)
-        except Exception as e:
-            print(get_linenumber(), "Something went wrong:", e)
-            raise RuntimeError()
-        right_part = current_comparison_operator + "0"
-        found_number = False
-        for arithmetical_operator in arithmetical_operators:
-            if arithmetical_operator in left_part:
-                found_number = True
-                current_arithmetical_operator = arithmetical_operator
-                left_part_number = current_arithmetical_operator + left_part.split(arithmetical_operator)[1]
-                break
-        if found_number:
-            measure = left_part.split(current_arithmetical_operator)[0]
-            try:
-                float_left_part_number = float(left_part_number)
-            except Exception as e:
-                print(get_linenumber(), "Something went wrong:", e)
-                raise RuntimeError()
-            float_combined_number = float_left_part_number + (-1 * float_right_part_number)
-            if float_combined_number > 0:
-                final_left_part = "x + " + str(float_combined_number)
+    def _define_args(method_args, kwargs):
+        final_dict = {}
+        for k in method_args:
+            if k in kwargs.keys():
+                final_dict[k] = kwargs[k]
             else:
-                final_left_part = "x " + str(float_combined_number)
-        else:
-            measure = left_part
-            if -1 * float_right_part_number > 0:
-                final_left_part = "x + " + str(float_right_part_number)
-            else:
-                final_left_part = "x " + str(-1 * float_right_part_number)
-        return measure, final_left_part, right_part
+                final_dict[k] = method_args[k]
+        return final_dict
+
+    def _validate_operation(operation, operations_list):
+        if operation not in operations_list:
+            raise RuntimeError("you have to provide with a valid operation")
+
+    def _time_dim_validation(frequency, midnight):
+        frequencies = ["s", "m", "h", "3", "6", "d", "w", "M", "q", "y", "A"]
+        midnights = ["00", "24"]
+        if midnight not in midnights:
+            raise RuntimeError("Wrong midnight argument")
+        if frequency not in frequencies:
+            raise RuntimeError("Wrong frequency argument")
+
+    reduce_operations = ["count", "max", "min", "avg", "sum", "std", "var", "cmoment", "acmoment", "rmoment",
+                         "armoment", "quantile", "arg_max", "arg_min"]
+    aggregate_operations = ["count", "max", "min", "avg", "sum"]
+    aggregate_default_args = {"exec_mode": "async", "schedule": "0", "group_size": "all", "missingvalue": "NAN",
+                              "grid": "-", "container": "-", "check_grid": "yes"}
+    aggregate2_default_args = {"exec_mode": "async", "schedule": "0", "missingvalue": "NAN", "grid": "-",
+                               "container": "-", "check_grid": "yes", "concept_level": "A", "midnight": "24"}
+    merge_default_args = {"exec_mode": "async", "schedule": "0", "grid": "-", "container": "-",
+                          "nmerge": "0"}
+    reduce_default_args = {"exec_mode": "async", "schedule": "0", "group_size": "all",
+                           "missingvalue": "NAN", "grid": "-", "container": "-", "check_grid": "yes",
+                           }
+    reduce2_default_args = {"exec_mode": "async", "schedule": "0", "missingvalue": "NAN", "grid": "-", "container": "-",
+                            "check_grid": "yes", "concept_level": "A", "midnight": "24", "order": "2"}
+
     cube.info(display=False)
-    input_type = _get_input_type(cube.measure_type)
-    output_type = _get_output_type(if_true, input_type)
-    if not output_type:
-        raise RuntimeError('given output_type is wrong')
-    if not input_type:
-        raise RuntimeError('given input_type is wrong')
-    measure, measure_modification, comparison = _split_expression(expression)
-    if measure == cube.measure:
-        measure = "measure"
+    _args_validation(cube, operation, dim)
+    _dim_validation(cube, dim)
+    if dim == "explicit":
+        aggregate_args = _define_args(aggregate_default_args, kwargs)
+        _validate_operation(operation, aggregate_operations)
+        if aggregate_args["group_size"] == "all":
+            cube.aggregate(operation=operation, ncores=ncores, nthreads=nthreads, description=description,
+                           **aggregate_args)
+            merge_args = _define_args(merge_default_args, kwargs)
+            cube.merge(description=description, ncores=ncores, **merge_args)
+            cube.aggregate(operation=operation, ncores=ncores, nthreads=nthreads, description=description,
+                           **aggregate_args)
+        else:
+            cube.aggregate(operation=operation, ncores=ncores, nthreads=nthreads, description=description,
+                           **aggregate_args)
+    elif dim == "implicit":
+        _validate_operation(operation, reduce_operations)
+        reduce_args = _define_args(reduce_default_args, kwargs)
+        cube.reduce(operation=operation, ncores=ncores, nthreads=nthreads, description=description, **reduce_args)
     else:
-        raise RuntimeError('measure is wrong')
-    try:
-        results = cube.apply(
-            query="oph_predicate('" + input_type + "','" + output_type + "'," + measure + ",'" +
-                  measure_modification + "','" + comparison + "','" + str(if_true) + "','" +
-                  str(if_false) + "')", ncores=ncores, nthreads=nthreads, description=description,
-            display=display
-        )
-    except Exception as e:
-        print(get_linenumber(), "Something went wrong:", e)
-        raise RuntimeError()
-    return results
 
+        if dim == _time_dimension_finder(cube):
+            if ("frequency" or "midnight") not in kwargs.keys():
+                raise RuntimeError("you have to include frequency and midnight parameters")
+            _time_dim_validation(kwargs["frequency"], kwargs["midnight"])
+        else:
+            if ("frequency" or "midnight") in kwargs.keys():
+                import warnings
+                warnings.warn("Frequency or midnight arguments will not be used")
+        if _find_dim_type(cube, dim) == "implicit":
+            _validate_operation(operation, reduce_operations)
+            reduce2_args = _define_args(reduce2_default_args, kwargs)
+            cube.reduce2(operation=operation, dim=dim, ncores=ncores, nthreads=nthreads, description=description,
+                         **reduce2_args)
+        else:
+            _validate_operation(operation, aggregate_operations)
+            aggregate2_args = _define_args(aggregate2_default_args, kwargs)
+            cube.aggregate2(operation=operation, dim=dim, ncores=ncores, nthreads=nthreads, description=description,
+                            **aggregate2_args)
 
 
