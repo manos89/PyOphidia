@@ -34,7 +34,9 @@ def get_linenumber():
     return __file__, cf.f_back.f_lineno
 
 
-def reduction(cube, operation, dim, nthreads=1, ncores=1, description="-", **kwargs):
+def reduction(cube, operation, dim, nthreads=None, ncores=None, description=None, exec_mode=None, schedule=None,
+              group_size=None, missingvalue=None, grid=None, container=None, check_grid=None, concept_level=None,
+              midnight=None, order=None, nmerge=None, frequency=None):
 
     def _time_dimension_finder(cube):
         """
@@ -67,11 +69,12 @@ def reduction(cube, operation, dim, nthreads=1, ncores=1, description="-", **kwa
 
     def _define_args(method_args, kwargs):
         final_dict = {}
-        for k in method_args:
-            if k in kwargs.keys():
-                final_dict[k] = kwargs[k]
-            else:
-                final_dict[k] = method_args[k]
+        for k in kwargs.keys():
+            if k in method_args.keys():
+                if kwargs[k] is None:
+                    final_dict[k] = method_args[k]
+                else:
+                    final_dict[k] = kwargs[k]
         return final_dict
 
     def _validate_operation(operation, operations_list):
@@ -81,8 +84,9 @@ def reduction(cube, operation, dim, nthreads=1, ncores=1, description="-", **kwa
     def _time_dim_validation(frequency, midnight):
         frequencies = ["s", "m", "h", "3", "6", "d", "w", "M", "q", "y", "A"]
         midnights = ["00", "24"]
-        if midnight not in midnights:
-            raise RuntimeError("Wrong midnight argument")
+        if midnight is not None:
+            if midnight not in midnights:
+                raise RuntimeError("Wrong midnight argument")
         if frequency not in frequencies:
             raise RuntimeError("Wrong frequency argument")
 
@@ -90,42 +94,42 @@ def reduction(cube, operation, dim, nthreads=1, ncores=1, description="-", **kwa
                          "armoment", "quantile", "arg_max", "arg_min"]
     aggregate_operations = ["count", "max", "min", "avg", "sum"]
     aggregate_default_args = {"exec_mode": "async", "schedule": "0", "group_size": "all", "missingvalue": "NAN",
-                              "grid": "-", "container": "-", "check_grid": "yes"}
+                              "grid": "-", "container": "-", "check_grid": "yes", "nthreads": "1", "ncores": "1",
+                              "description": "-"}
     aggregate2_default_args = {"exec_mode": "async", "schedule": "0", "missingvalue": "NAN", "grid": "-",
-                               "container": "-", "check_grid": "yes", "concept_level": "A", "midnight": "24"}
-    merge_default_args = {"exec_mode": "async", "schedule": "0", "grid": "-", "container": "-",
-                          "nmerge": "0"}
+                               "container": "-", "check_grid": "yes", "concept_level": "A", "midnight": "24",
+                               "nthreads": "1", "ncores": "1", "description": "-"}
+    merge_default_args = {"exec_mode": "async", "schedule": "0", "container": "-",
+                          "nmerge": "0", "ncores": "1", "description": "-"}
     reduce_default_args = {"exec_mode": "async", "schedule": "0", "group_size": "all",
-                           "missingvalue": "NAN", "grid": "-", "container": "-", "check_grid": "yes",
-                           }
+                           "missingvalue": "NAN", "grid": "-", "container": "-", "check_grid": "yes", "nthreads": "1",
+                           "ncores": "1", "description": "-"}
     reduce2_default_args = {"exec_mode": "async", "schedule": "0", "missingvalue": "NAN", "grid": "-", "container": "-",
-                            "check_grid": "yes", "concept_level": "A", "midnight": "24", "order": "2"}
+                            "check_grid": "yes", "concept_level": "A", "midnight": "24", "order": "2", "nthreads": "1",
+                            "ncores": "1", "description": "-"}
 
     cube.info(display=False)
+    kwargs = locals()
     _args_validation(cube, operation, dim)
     _dim_validation(cube, dim)
     if dim == "explicit":
         aggregate_args = _define_args(aggregate_default_args, kwargs)
         _validate_operation(operation, aggregate_operations)
-        if aggregate_args["group_size"] == "all":
-            cube.aggregate(operation=operation, ncores=ncores, nthreads=nthreads, description=description,
-                           **aggregate_args)
+        if aggregate_args["group_size"] == "all" and int(cube.nfragments) > 1:
+            cube.aggregate(operation=operation, **aggregate_args)
             merge_args = _define_args(merge_default_args, kwargs)
-            cube.merge(description=description, ncores=ncores, **merge_args)
-            cube.aggregate(operation=operation, ncores=ncores, nthreads=nthreads, description=description,
-                           **aggregate_args)
+            cube.merge(**merge_args)
+            cube.aggregate(operation=operation, **aggregate_args)
         else:
-            cube.aggregate(operation=operation, ncores=ncores, nthreads=nthreads, description=description,
-                           **aggregate_args)
+            cube.aggregate(operation=operation, **aggregate_args)
     elif dim == "implicit":
         _validate_operation(operation, reduce_operations)
         reduce_args = _define_args(reduce_default_args, kwargs)
-        cube.reduce(operation=operation, ncores=ncores, nthreads=nthreads, description=description, **reduce_args)
+        cube.reduce(operation=operation, **reduce_args)
     else:
-
         if dim == _time_dimension_finder(cube):
-            if ("frequency" or "midnight") not in kwargs.keys():
-                raise RuntimeError("you have to include frequency and midnight parameters")
+            if kwargs["frequency"] is None:
+                raise RuntimeError("you have to include frequency parameters")
             _time_dim_validation(kwargs["frequency"], kwargs["midnight"])
         else:
             if ("frequency" or "midnight") in kwargs.keys():
@@ -134,12 +138,13 @@ def reduction(cube, operation, dim, nthreads=1, ncores=1, description="-", **kwa
         if _find_dim_type(cube, dim) == "implicit":
             _validate_operation(operation, reduce_operations)
             reduce2_args = _define_args(reduce2_default_args, kwargs)
-            cube.reduce2(operation=operation, dim=dim, ncores=ncores, nthreads=nthreads, description=description,
-                         **reduce2_args)
+            if dim == _time_dimension_finder(cube):
+                reduce2_args["concept_level"] = kwargs["frequency"]
+            cube.reduce2(operation=operation, dim=dim, **reduce2_args)
         else:
             _validate_operation(operation, aggregate_operations)
             aggregate2_args = _define_args(aggregate2_default_args, kwargs)
-            cube.aggregate2(operation=operation, dim=dim, ncores=ncores, nthreads=nthreads, description=description,
-                            **aggregate2_args)
-
+            if dim == _time_dimension_finder(cube):
+                aggregate2_args["concept_level"] = kwargs["frequency"]
+            cube.aggregate2(operation=operation, dim=dim, **aggregate2_args)
 
