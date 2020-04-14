@@ -193,8 +193,8 @@ def convert_to_dataframe(cube):
     import pandas as pd
     cube.info(display=False)
     pid = cube.pid
-    query = 'oph_explorecube ncore=1;base64=yes;level=2;show_index=yes;subset_type=coord;limit_filter=0;cube={0};'. \
-        format(pid)
+    query = 'oph_explorecube ncore=1;base64=yes;level=2;show_time=yes;show_index=yes;subset_type=coord;' \
+            'limit_filter=0;cube={0};'.format(pid)
     cube.client.submit(query, display=False)
     response = cube.client.deserialize_response()
     try:
